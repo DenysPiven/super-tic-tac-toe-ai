@@ -31,7 +31,7 @@ let winner = null; // null | 'X' | 'O' | 'draw'
 
 // Mode: 'two' = two players, 'ai' = vs AI bot
 let gameMode = 'two';
-let humanSide = 'O'; // when vs AI: 'X' or 'O'
+let humanSide = 'X'; // when vs AI: 'X' or 'O'
 let aiTimeoutId = null;
 let lastMove = null; // [bigIdx, smallIdx] of last played cell, or null
 

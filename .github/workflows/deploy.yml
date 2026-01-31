@@ -1,9 +1,15 @@
-# Train model + deploy frontend to GitHub Pages. Play at: https://<user>.github.io/super-tic-tac-toe-ai/
+# Deploy frontend to GitHub Pages (uses existing model from frontend/model/weights.json)
+# Runs when frontend files change or manually triggered
 name: Deploy to GitHub Pages
 
 on:
   push:
     branches: [master]
+    paths:
+      - 'frontend/**'
+      - '.github/workflows/deploy.yml'
+    paths-ignore:
+      - 'frontend/model/weights.json'
   workflow_dispatch:
 
 permissions:
@@ -21,19 +27,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Install dependencies
-        run: pip install -r training/requirements.txt
-
-      - name: Train model
-        run: python -m training.train --games 15000 --epochs 10 --batch 256
-
-      - name: Export model for frontend
-        run: python -m training.export_for_js
+      - name: Check if model exists
+        id: check_model
+        run: |
+          if [ -f "frontend/model/weights.json" ]; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "Model found: frontend/model/weights.json"
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "Warning: frontend/model/weights.json not found. AI will play randomly."
+          fi
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v4
