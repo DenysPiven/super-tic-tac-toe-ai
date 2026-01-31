@@ -213,11 +213,10 @@ node_modules/
 .DS_Store
 Thumbs.db
 
-# ML / training artifacts (train on your machine, don't push)
+# ML / training artifacts (don't push .pt checkpoints; weights.json is committed for deploy)
 *.h5
 *.pkl
 *.pt
 *.pth
 checkpoints/
 training/checkpoints/
-frontend/model/weights.json
