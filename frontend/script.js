@@ -29,11 +29,18 @@ let player = 'X';
 let availableBig = -1;
 let winner = null; // null | 'X' | 'O' | 'draw'
 
-// Mode: 'two' = two players, 'ai' = vs AI bot
+// Mode: 'two' = two players (offline), 'online' = online multiplayer, 'ai' = vs AI bot
 let gameMode = 'two';
 let humanSide = 'X'; // when vs AI: 'X' or 'O'
 let aiTimeoutId = null;
 let lastMove = null; // [bigIdx, smallIdx] of last played cell, or null
+
+// Online multiplayer (WebRTC via PeerJS)
+let peer = null;
+let peerConnection = null;
+let onlineRole = null; // 'X' | 'O' | null
+let roomId = null;
+let isHost = false;
 
 let replayMode = false;
 let replayMoves = [];
@@ -118,6 +125,15 @@ function updateStatus() {
     if (winner === 'X') statusEl.textContent = "X wins!";
     else if (winner === 'O') statusEl.textContent = "O wins!";
     else if (winner === 'draw') statusEl.textContent = "Draw!";
+    else if (gameMode === 'online') {
+        if (!peerConnection || !peerConnection.open) {
+            statusEl.textContent = onlineRole ? `Connecting... (You are ${onlineRole})` : "Not connected";
+        } else if (player !== onlineRole) {
+            statusEl.textContent = `Waiting for opponent... (You are ${onlineRole})`;
+        } else {
+            statusEl.textContent = `Your turn (${onlineRole})`;
+        }
+    }
     else if (gameMode === 'ai' && player !== humanSide) statusEl.textContent = policyModel ? "AI thinking…" : "AI model not loaded";
     else statusEl.textContent = `${player}'s turn`;
 }
@@ -176,8 +192,10 @@ function loadState() {
 
 function syncModeUI() {
     document.getElementById('modeTwo').classList.toggle('active', gameMode === 'two');
+    document.getElementById('modeOnline').classList.toggle('active', gameMode === 'online');
     document.getElementById('modeAi').classList.toggle('active', gameMode === 'ai');
     document.getElementById('sideRow').classList.toggle('hidden', gameMode !== 'ai');
+    document.getElementById('onlinePanel').classList.toggle('hidden', gameMode !== 'online');
     document.getElementById('sideX').classList.toggle('active', humanSide === 'X');
     document.getElementById('sideO').classList.toggle('active', humanSide === 'O');
 }
@@ -250,10 +268,20 @@ function updateAvailability() {
 }
 
 // --- Move logic ---
-function applyMove(bigIdx, smallIdx) {
+function applyMove(bigIdx, smallIdx, skipOnline = false) {
     if (winner !== null) return;
     if (availableBig !== -1 && availableBig !== bigIdx) return;
     if (small[bigIdx][smallIdx] !== '') return;
+    
+    // In online mode, send move to peer
+    if (gameMode === 'online' && !skipOnline && peerConnection && peerConnection.open) {
+        if (player !== onlineRole) return; // Not your turn
+        peerConnection.send(JSON.stringify({
+            type: 'move',
+            big_idx: bigIdx,
+            small_idx: smallIdx
+        }));
+    }
 
     document.querySelectorAll('.cell').forEach(el => el.classList.remove('lastTurn'));
 
@@ -301,6 +329,11 @@ function applyMove(bigIdx, smallIdx) {
     updateAvailability();
     updateStatus();
     if (!replayMode) saveState();
+    
+    // Send state to peer in online mode
+    if (gameMode === 'online' && peerConnection && peerConnection.open) {
+        sendGameState();
+    }
 
     // If vs AI and it's AI's turn, schedule AI move (not in replay)
     if (!replayMode && gameMode === 'ai' && winner === null && player !== humanSide) {
@@ -476,11 +509,186 @@ function pauseReplayPlayback() {
     if (pauseBtn) pauseBtn.classList.add('hidden');
 }
 
+// --- Online multiplayer (WebRTC via PeerJS) ---
+function generateRoomId() {
+    return Math.random().toString(36).substring(2, 8).toUpperCase();
+}
+
+function createRoom() {
+    if (peer) {
+        peer.destroy();
+    }
+    
+    roomId = generateRoomId();
+    isHost = true;
+    onlineRole = 'X';
+    
+    peer = new Peer(roomId, {
+        host: '0.peerjs.com',
+        port: 443,
+        path: '/',
+        secure: true
+    });
+    
+    peer.on('open', (id) => {
+        document.getElementById('roomIdDisplay').textContent = roomId;
+        document.getElementById('roomInfo').classList.remove('hidden');
+        document.getElementById('joinForm').classList.add('hidden');
+        document.getElementById('roomStatus').textContent = 'Waiting for opponent...';
+        updateStatus();
+    });
+    
+    peer.on('connection', (conn) => {
+        peerConnection = conn;
+        peerConnection.on('open', () => {
+            document.getElementById('roomStatus').textContent = 'Connected! You are X';
+            // Send initial state
+            sendGameState();
+        });
+        peerConnection.on('data', handlePeerData);
+        peerConnection.on('close', () => {
+            document.getElementById('roomStatus').textContent = 'Opponent disconnected';
+            peerConnection = null;
+        });
+    });
+    
+    peer.on('error', (err) => {
+        console.error('Peer error:', err);
+        alert('Connection error: ' + err.message);
+    });
+}
+
+function joinRoomById(id) {
+    if (peer) {
+        peer.destroy();
+    }
+    
+    roomId = id.toUpperCase();
+    isHost = false;
+    onlineRole = 'O';
+    
+    peer = new Peer(undefined, {
+        host: '0.peerjs.com',
+        port: 443,
+        path: '/',
+        secure: true
+    });
+    
+    peer.on('open', () => {
+        peerConnection = peer.connect(roomId);
+        
+        if (peerConnection) {
+            peerConnection.on('open', () => {
+                document.getElementById('roomIdDisplay').textContent = roomId;
+                document.getElementById('roomInfo').classList.remove('hidden');
+                document.getElementById('joinForm').classList.add('hidden');
+                document.getElementById('roomStatus').textContent = 'Connected! You are O';
+                updateStatus();
+            });
+            peerConnection.on('data', handlePeerData);
+            peerConnection.on('close', () => {
+                document.getElementById('roomStatus').textContent = 'Host disconnected';
+                peerConnection = null;
+            });
+        }
+    });
+    
+    peer.on('error', (err) => {
+        console.error('Peer error:', err);
+        if (err.type === 'peer-unavailable') {
+            alert('Room not found. Please check the room ID.');
+        } else {
+            alert('Connection error: ' + err.message);
+        }
+    });
+}
+
+function handlePeerData(data) {
+    try {
+        const msg = JSON.parse(data);
+        
+        if (msg.type === 'move') {
+            applyMove(msg.big_idx, msg.small_idx, true); // skipOnline = true to avoid loop
+        } else if (msg.type === 'state') {
+            loadGameStateFromPeer(msg.state);
+        } else if (msg.type === 'reset') {
+            resetState();
+            buildBoard();
+        }
+    } catch (e) {
+        console.error('Error handling peer data:', e);
+    }
+}
+
+function sendGameState() {
+    if (peerConnection && peerConnection.open) {
+        peerConnection.send(JSON.stringify({
+            type: 'state',
+            state: {
+                big: [...big],
+                small: small.map(row => [...row]),
+                current_player: player,
+                available_big: availableBig,
+                winner: winner
+            }
+        }));
+    }
+}
+
+function loadGameStateFromPeer(stateData) {
+    for (let i = 0; i < 9; i++) {
+        big[i] = stateData.big[i] || '';
+    }
+    for (let i = 0; i < 9; i++) {
+        for (let j = 0; j < 9; j++) {
+            small[i][j] = stateData.small[i][j] || '';
+        }
+    }
+    player = stateData.current_player || 'X';
+    availableBig = stateData.available_big !== undefined ? stateData.available_big : -1;
+    winner = stateData.winner || null;
+    buildBoard();
+    updateAvailability();
+    updateStatus();
+}
+
+function leaveRoom() {
+    if (peerConnection) {
+        peerConnection.close();
+        peerConnection = null;
+    }
+    if (peer) {
+        peer.destroy();
+        peer = null;
+    }
+    roomId = null;
+    onlineRole = null;
+    isHost = false;
+    document.getElementById('roomInfo').classList.add('hidden');
+    document.getElementById('joinForm').classList.add('hidden');
+    if (gameMode === 'online') {
+        resetState();
+        buildBoard();
+    }
+}
+
+function copyRoomLink() {
+    if (!roomId) return;
+    const url = `${window.location.origin}${window.location.pathname}?room=${roomId}`;
+    navigator.clipboard.writeText(url).then(() => {
+        const btn = document.getElementById('copyRoomId');
+        const original = btn.textContent;
+        btn.textContent = '✓';
+        setTimeout(() => { btn.textContent = original; }, 2000);
+    });
+}
+
 // --- Events ---
 document.getElementById('area')?.addEventListener('click', (e) => {
     if (!e.target.classList.contains('smallCell')) return;
     if (replayMode) return;
     if (gameMode === 'ai' && player !== humanSide) return; // not human's turn
+    if (gameMode === 'online' && player !== onlineRole) return; // not your turn in online
     const bigCell = e.target.closest('.bigCell');
     if (!bigCell) return;
     const i = parseInt(bigCell.id, 10);
@@ -496,14 +704,21 @@ document.getElementById('newGame')?.addEventListener('click', () => {
     replayStep = 0;
     replayResult = null;
     updateReplayUI();
-    resetState();
-    buildBoard();
-    saveState();
-    if (gameMode === 'ai' && humanSide === 'O') scheduleAiMove(); // X goes first
+    if (gameMode === 'online' && peerConnection && peerConnection.open) {
+        peerConnection.send(JSON.stringify({ type: 'reset' }));
+        resetState();
+        buildBoard();
+    } else {
+        resetState();
+        buildBoard();
+        saveState();
+        if (gameMode === 'ai' && humanSide === 'O') scheduleAiMove(); // X goes first
+    }
 });
 
 document.getElementById('modeTwo')?.addEventListener('click', () => {
     cancelAiMove();
+    leaveRoom();
     gameMode = 'two';
     syncModeUI();
     saveState();
@@ -511,11 +726,14 @@ document.getElementById('modeTwo')?.addEventListener('click', () => {
 });
 
 document.getElementById('modeAi')?.addEventListener('click', () => {
+    cancelAiMove();
+    leaveRoom();
     gameMode = 'ai';
     syncModeUI();
     saveState();
     updateStatus();
 });
+
 
 document.getElementById('sideX')?.addEventListener('click', () => {
     humanSide = 'X';
@@ -610,7 +828,18 @@ function loadPolicyModel() {
 
 loadPolicyModel();
 loadReplayList();
-if (loadState()) {
+
+// Check for room ID in URL
+const urlParams = new URLSearchParams(window.location.search);
+const roomParam = urlParams.get('room');
+
+if (roomParam) {
+    gameMode = 'online';
+    syncModeUI();
+    setTimeout(() => {
+        joinRoomById(roomParam);
+    }, 500);
+} else if (loadState()) {
     syncModeUI();
     buildBoard();
     if (gameMode === 'ai' && winner === null && player !== humanSide) scheduleAiMove();
