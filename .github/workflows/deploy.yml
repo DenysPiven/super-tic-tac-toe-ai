@@ -6,10 +6,12 @@ on:
   push:
     branches: [master]
     paths:
-      - 'frontend/**'
+      - 'frontend/index.html'
+      - 'frontend/script.js'
+      - 'frontend/style.css'
+      - 'frontend/favicon.ico'
+      - 'frontend/replays/**'
       - '.github/workflows/deploy.yml'
-    paths-ignore:
-      - 'frontend/model/weights.json'
   workflow_dispatch:
 
 permissions:
