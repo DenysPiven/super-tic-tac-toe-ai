@@ -1,0 +1,26 @@
+[
+  {
+    "file": "replay_20260131_235339.json",
+    "result": "X",
+    "steps": 59,
+    "date": "20260131_235339"
+  },
+  {
+    "file": "replay_20260131_235339.json",
+    "result": "O",
+    "steps": 64,
+    "date": "20260131_235339"
+  },
+  {
+    "file": "replay_20260131_235348_1.json",
+    "result": "draw",
+    "steps": 63,
+    "date": "20260131_235348"
+  },
+  {
+    "file": "replay_20260131_235348_2.json",
+    "result": "draw",
+    "steps": 59,
+    "date": "20260131_235348"
+  }
+]

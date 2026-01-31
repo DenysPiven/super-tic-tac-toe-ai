@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Super Tic-Tac-Toe</title>
+    <meta name="description" content="Ultimate Tic-Tac-Toe — play 9 boards in one.">
+    <link rel="stylesheet" href="style.css">
+    <link rel="icon" type="image/x-icon" href="favicon.ico">
+</head>
+<body>
+    <div class="game">
+        <aside class="sidebar sidebar-left">
+            <div class="controls-top">
+                <div class="mode-row">
+                    <span class="mode-label">Mode</span>
+                    <div class="btn-group">
+                        <button type="button" id="modeTwo" class="btn-mode active" data-mode="two">Two players</button>
+                        <button type="button" id="modeAi" class="btn-mode" data-mode="ai">vs AI</button>
+                    </div>
+                </div>
+                <div id="sideRow" class="side-row hidden">
+                    <span class="mode-label">You play</span>
+                    <div class="btn-group">
+                        <button type="button" id="sideX" class="btn-mode" data-side="X">X</button>
+                        <button type="button" id="sideO" class="btn-mode active" data-side="O">O</button>
+                    </div>
+                </div>
+                <button type="button" id="newGame" class="btn-new">New game</button>
+            </div>
+        </aside>
+        <div class="main">
+            <header class="header">
+                <h1>Super Tic-Tac-Toe</h1>
+                <p id="status" class="status" aria-live="polite">X's turn</p>
+            </header>
+            <main class="board-wrap">
+                <div id="area" class="area" role="grid" aria-label="Ultimate tic-tac-toe board"></div>
+            </main>
+        </div>
+        <aside class="sidebar sidebar-right">
+            <div class="replay-panel">
+                <h3 class="replay-title">Replay</h3>
+                <div class="replay-row">
+                    <select id="replayList" class="replay-select" disabled>
+                        <option value="">— Choose replay —</option>
+                    </select>
+                    <button type="button" id="refreshReplayList" class="btn-icon" title="Refresh list">↻</button>
+                </div>
+                <div class="replay-controls">
+                    <div class="replay-buttons">
+                        <button type="button" id="playReplay" class="btn-icon" disabled title="Play">▶</button>
+                        <button type="button" id="pauseReplay" class="btn-icon hidden" title="Pause">⏸</button>
+                        <button type="button" id="prevReplay" class="btn-icon" disabled title="Previous">⏮</button>
+                        <button type="button" id="nextReplay" class="btn-icon" disabled title="Next">⏭</button>
+                    </div>
+                    <input type="range" id="replaySlider" class="replay-slider" min="0" max="0" value="0" disabled>
+                    <span id="replayInfo" class="replay-info">0 / 0</span>
+                </div>
+            </div>
+        </aside>
+    </div>
+    <script src="script.js"></script>
+</body>
+</html>
