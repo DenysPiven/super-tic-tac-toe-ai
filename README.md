@@ -1,4 +1,4 @@
-# Super Tic-Tac-Toe (Ultimate) + AI
+# Super Tic-Tac-Toe (Ultimate)
 
 Super Tic-Tac-Toe with an AI mode trained via self-play (millions of games against itself).
 
