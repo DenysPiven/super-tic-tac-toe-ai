@@ -80,7 +80,17 @@
             </div>
         </aside>
     </div>
-    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js" onerror="console.error('Failed to load PeerJS')"></script>
+    <script>
+        // Wait for PeerJS to load before initializing
+        if (typeof Peer === 'undefined') {
+            window.addEventListener('load', function() {
+                if (typeof Peer === 'undefined') {
+                    console.error('PeerJS failed to load');
+                }
+            });
+        }
+    </script>
     <script src="script.js"></script>
 </body>
 </html>

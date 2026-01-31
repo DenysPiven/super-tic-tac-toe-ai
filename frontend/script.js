@@ -515,6 +515,11 @@ function generateRoomId() {
 }
 
 function createRoom() {
+    if (typeof Peer === 'undefined') {
+        alert('PeerJS library not loaded. Please refresh the page.');
+        return;
+    }
+    
     if (peer) {
         peer.destroy();
     }
@@ -559,6 +564,11 @@ function createRoom() {
 }
 
 function joinRoomById(id) {
+    if (typeof Peer === 'undefined') {
+        alert('PeerJS library not loaded. Please refresh the page.');
+        return;
+    }
+    
     if (peer) {
         peer.destroy();
     }
@@ -725,7 +735,13 @@ document.getElementById('modeTwo')?.addEventListener('click', () => {
     updateStatus();
 });
 
+// Add event listener for Online mode button
 document.getElementById('modeOnline')?.addEventListener('click', () => {
+    if (typeof Peer === 'undefined') {
+        alert('PeerJS library not loaded. Please check your internet connection and refresh the page.');
+        console.error('PeerJS not available');
+        return;
+    }
     cancelAiMove();
     gameMode = 'online';
     syncModeUI();
