@@ -8,6 +8,12 @@ Super Tic-Tac-Toe with an AI mode trained via self-play (millions of games again
 - **core/** — Game engine (rules, state, legal moves)
 - **training/** — Model training (Python, self-play, reinforcement learning)
 
+## Deploy & play
+
+1. **One-time:** In the repo **Settings → Pages**, set **Source** to **GitHub Actions**.
+2. Push to `master` (or run **Actions → Deploy to GitHub Pages → Run workflow**). The workflow trains the model (~3–5 min) and deploys the frontend.
+3. **Play:** https://denyspiven.github.io/super-tic-tac-toe-ai/
+
 ## Rules
 
 [Ultimate tic-tac-toe (Wikipedia)](https://en.wikipedia.org/wiki/Ultimate_tic-tac-toe)
