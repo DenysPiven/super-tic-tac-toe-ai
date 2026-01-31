@@ -725,6 +725,13 @@ document.getElementById('modeTwo')?.addEventListener('click', () => {
     updateStatus();
 });
 
+document.getElementById('modeOnline')?.addEventListener('click', () => {
+    cancelAiMove();
+    gameMode = 'online';
+    syncModeUI();
+    updateStatus();
+});
+
 document.getElementById('modeAi')?.addEventListener('click', () => {
     cancelAiMove();
     leaveRoom();
@@ -734,6 +741,25 @@ document.getElementById('modeAi')?.addEventListener('click', () => {
     updateStatus();
 });
 
+document.getElementById('createRoom')?.addEventListener('click', createRoom);
+document.getElementById('joinRoom')?.addEventListener('click', () => {
+    document.getElementById('joinForm').classList.toggle('hidden');
+});
+document.getElementById('joinRoomBtn')?.addEventListener('click', () => {
+    const roomId = document.getElementById('roomIdInput').value.trim().toUpperCase();
+    if (roomId.length === 6) {
+        joinRoomById(roomId);
+    } else {
+        alert('Room ID must be 6 characters');
+    }
+});
+document.getElementById('roomIdInput')?.addEventListener('keypress', (e) => {
+    if (e.key === 'Enter') {
+        document.getElementById('joinRoomBtn').click();
+    }
+});
+document.getElementById('copyRoomId')?.addEventListener('click', copyRoomLink);
+document.getElementById('leaveRoom')?.addEventListener('click', leaveRoom);
 
 document.getElementById('sideX')?.addEventListener('click', () => {
     humanSide = 'X';
