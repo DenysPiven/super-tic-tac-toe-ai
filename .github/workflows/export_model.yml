@@ -1,0 +1,48 @@
+# Export model to ONNX format (manual trigger)
+# Requires model.pt file to be available
+name: Export Model to ONNX
+
+on:
+  workflow_dispatch:
+    inputs:
+      model_path:
+        description: 'Path to PyTorch model file (.pt)'
+        required: true
+        default: 'model.pt'
+
+permissions:
+  contents: write
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+      
+      - name: Install dependencies
+        run: |
+          pip install torch onnx
+          # Clone utttai repo for model architecture
+          if [ ! -d "../utttai" ]; then
+            git clone https://github.com/arnowaczynski/utttai.git ../utttai || echo "utttai repo not available"
+          fi
+      
+      - name: Export model
+        run: |
+          python scripts/export_model.py \
+            --model_path "${{ github.event.inputs.model_path }}" \
+            --output_path model/policy_value_net.onnx
+      
+      - name: Commit and push model
+        if: success()
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add model/policy_value_net.onnx
+          git commit -m "Add ONNX model" || echo "No changes to commit"
+          git push

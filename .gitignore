@@ -220,3 +220,6 @@ Thumbs.db
 *.pth
 checkpoints/
 training/checkpoints/
+
+# Frontend model (copied from core/model/ during deploy)
+frontend/model/

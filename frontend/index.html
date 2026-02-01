@@ -77,28 +77,19 @@
             </main>
         </div>
         <aside class="sidebar sidebar-right">
-            <div class="replay-panel">
-                <h3 class="replay-title">Replay</h3>
-                <div class="replay-row">
-                    <select id="replayList" class="replay-select" disabled>
-                        <option value="">— Choose replay —</option>
-                    </select>
-                    <button type="button" id="refreshReplayList" class="btn-icon" title="Refresh list">↻</button>
-                </div>
-                <div class="replay-controls">
-                    <div class="replay-buttons">
-                        <button type="button" id="playReplay" class="btn-icon" disabled title="Play">▶</button>
-                        <button type="button" id="pauseReplay" class="btn-icon hidden" title="Pause">⏸</button>
-                        <button type="button" id="prevReplay" class="btn-icon" disabled title="Previous">⏮</button>
-                        <button type="button" id="nextReplay" class="btn-icon" disabled title="Next">⏭</button>
+            <div class="controls-top">
+                <div class="settings-group">
+                    <label class="setting-label">Show Move Probabilities</label>
+                    <div class="btn-group">
+                        <button type="button" id="heatmapToggle" class="btn-mode active" data-heatmap="on">On</button>
+                        <button type="button" class="btn-mode" data-heatmap="off">Off</button>
                     </div>
-                    <input type="range" id="replaySlider" class="replay-slider" min="0" max="0" value="0" disabled>
-                    <span id="replayInfo" class="replay-info">0 / 0</span>
                 </div>
             </div>
         </aside>
     </div>
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js" onerror="console.error('Failed to load PeerJS')"></script>
+    <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js"></script>
     <script>
         // Wait for PeerJS to load before initializing
         if (typeof Peer === 'undefined') {

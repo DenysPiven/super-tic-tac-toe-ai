@@ -34,6 +34,8 @@ let gameMode = 'two';
 let humanSide = 'X'; // when vs AI: 'X' or 'O'
 let aiTimeoutId = null;
 let lastMove = null; // [bigIdx, smallIdx] of last played cell, or null
+let showHeatmap = true; // Show AI move probabilities
+let currentProbabilities = null; // Map of move indices to probabilities
 
 // Online multiplayer (WebRTC via PeerJS)
 let peer = null;
@@ -44,20 +46,25 @@ let isHost = false;
 let creatorRole = null; // Role of room creator
 let pendingRoomId = null; // Room ID waiting for role selection
 
-let replayMode = false;
-let replayMoves = [];
-let replayStep = 0;
-let replayResult = null;
-let replayPlayInterval = null;
-let replayListData = [];
-
 const STORAGE_KEY = 'superTttState';
-const REPLAY_SPEED_MS = 600;
 
-// Policy model (loaded from model/weights.json)
-let policyModel = null;
-const STATE_DIM = 101;
+// ONNX model session (loaded from model/policy_value_net.onnx)
+let onnxSession = null;
 const MOVE_DIM = 81;
+
+// Mapping from our move index (0-80) to flattened 9x9 board index
+// FLAT_INDEX_0 maps state index to 9x9 board position
+const FLAT_INDEX_0 = Int32Array.from([
+    0,  1,  2,  9, 10, 11, 18, 19, 20,
+    3,  4,  5, 12, 13, 14, 21, 22, 23,
+    6,  7,  8, 15, 16, 17, 24, 25, 26,
+   27, 28, 29, 36, 37, 38, 45, 46, 47,
+   30, 31, 32, 39, 40, 41, 48, 49, 50,
+   33, 34, 35, 42, 43, 44, 51, 52, 53,
+   54, 55, 56, 63, 64, 65, 72, 73, 74,
+   57, 58, 59, 66, 67, 68, 75, 76, 77,
+   60, 61, 62, 69, 70, 71, 78, 79, 80,
+]);
 
 // --- Helpers ---
 function convertor(i, j) {
@@ -138,7 +145,7 @@ function updateStatus() {
             statusEl.textContent = `Your turn (${onlineRole})`;
         }
     }
-    else if (gameMode === 'ai' && player !== humanSide) statusEl.textContent = policyModel ? "AI thinking…" : "AI model not loaded";
+    else if (gameMode === 'ai' && player !== humanSide) statusEl.textContent = onnxSession ? "AI thinking…" : "AI model not loaded";
     else statusEl.textContent = `${player}'s turn`;
 }
 
@@ -220,6 +227,12 @@ function buildBoard() {
     if (!area) return;
     area.innerHTML = '';
     document.querySelector('.game')?.classList.remove('game-over');
+    clearHeatmap(); // Clear heatmap when rebuilding board
+    
+    // Update probabilities after board is built
+    if (showHeatmap && onnxSession && winner === null) {
+        setTimeout(() => updateProbabilitiesForCurrentPlayer(), 100);
+    }
 
     for (let i = 0; i < 9; i++) {
         const bigCell = document.createElement('div');
@@ -277,6 +290,8 @@ function applyMove(bigIdx, smallIdx, skipOnline = false) {
     if (availableBig !== -1 && availableBig !== bigIdx) return;
     if (small[bigIdx][smallIdx] !== '') return;
     
+    clearHeatmap(); // Clear heatmap when move is applied
+    
     // In online mode, send move to peer
     if (gameMode === 'online' && !skipOnline && peerConnection && peerConnection.open) {
         if (player !== onlineRole) return; // Not your turn
@@ -332,7 +347,12 @@ function applyMove(bigIdx, smallIdx, skipOnline = false) {
 
     updateAvailability();
     updateStatus();
-    if (!replayMode) saveState();
+    saveState();
+    
+    // Update heatmap for current player after move
+    if (showHeatmap && onnxSession && winner === null) {
+        updateProbabilitiesForCurrentPlayer();
+    }
     
     // Send state to peer in online mode and save room state
     if (gameMode === 'online' && peerConnection && peerConnection.open) {
@@ -340,92 +360,232 @@ function applyMove(bigIdx, smallIdx, skipOnline = false) {
         saveRoomState();
     }
 
-    // If vs AI and it's AI's turn, schedule AI move (not in replay)
-    if (!replayMode && gameMode === 'ai' && winner === null && player !== humanSide) {
+    // If vs AI and it's AI's turn, schedule AI move
+    if (gameMode === 'ai' && winner === null && player !== humanSide) {
         scheduleAiMove();
     }
 }
 
-// --- State encoding for policy (must match training/state_encoder.py) ---
+// --- State encoding for ONNX model (4x9x9 format) ---
 function encodeStateForModel() {
-    const me = player === 'X' ? 1 : -1;
-    const opp = player === 'X' ? -1 : 1;
-    const out = new Array(STATE_DIM).fill(0);
-    for (let i = 0; i < 9; i++) {
-        if (big[i] === 'X') out[i] = me;
-        else if (big[i] === 'O') out[i] = opp;
-    }
-    for (let i = 0; i < 9; i++) {
-        for (let j = 0; j < 9; j++) {
-            const cell = small[i][j];
-            const idx = 9 + i * 9 + j;
-            if (cell === 'X') out[idx] = me;
-            else if (cell === 'O') out[idx] = opp;
+    // Create 4x9x9 array (324 elements total)
+    const stateArray = new Float32Array(324);
+    
+    // Channel 2: current player indicator (+1 for X, -1 for O)
+    const isX = player === 'X';
+    stateArray.fill(isX ? 1 : -1, 162, 243);
+    
+    // Channels 0 and 1: current player's pieces and opponent's pieces
+    const xi = isX ? FLAT_INDEX_0 : FLAT_INDEX_0.map(v => v + 81);
+    const oi = isX ? FLAT_INDEX_0.map(v => v + 81) : FLAT_INDEX_0;
+    
+    // Fill channels 0 and 1 based on small boards
+    for (let si = 0; si < 81; si++) {
+        const bigIdx = Math.floor(si / 9);
+        const smallIdx = si % 9;
+        const cell = small[bigIdx][smallIdx];
+        if (cell === 'X') {
+            stateArray[xi[si]] = 1;
+        } else if (cell === 'O') {
+            stateArray[oi[si]] = 1;
         }
     }
-    out[90] = me;
-    if (availableBig === -1) out[91] = 1;
-    else if (availableBig >= 0 && availableBig <= 8) out[92 + availableBig] = 1;
-    return out;
+    
+    // Channel 3: legal moves
+    const legalMoves = getLegalMoves();
+    for (const [bigIdx, smallIdx] of legalMoves) {
+        const si = bigIdx * 9 + smallIdx;
+        if (si < FLAT_INDEX_0.length) {
+            stateArray[FLAT_INDEX_0[si] + 243] = 1;
+        }
+    }
+    
+    return stateArray;
 }
 
-// --- Policy forward pass (Linear -> ReLU -> LayerNorm x3, then head Linear) ---
-function policyForward(stateVec) {
-    const layers = policyModel.layers;
-    let x = stateVec.slice();
-    for (let i = 0; i < layers.length; i++) {
-        const L = layers[i];
-        if (L.type === 'linear') {
-            const W = L.weight;
-            const b = L.bias;
-            const out = [];
-            for (let j = 0; j < b.length; j++) {
-                let sum = b[j];
-                for (let k = 0; k < x.length; k++) sum += x[k] * W[k][j];
-                out.push(sum);
-            }
-            x = out;
-        } else if (L.type === 'relu') {
-            x = x.map(v => (v > 0 ? v : 0));
-        } else if (L.type === 'layernorm') {
-            const mean = x.reduce((a, b) => a + b, 0) / x.length;
-            const variance = x.reduce((a, v) => a + (v - mean) ** 2, 0) / x.length;
-            const std = Math.sqrt(variance + 1e-5);
-            x = x.map((v, j) => (v - mean) / std * L.weight[j] + L.bias[j]);
-        }
+// --- ONNX model inference ---
+async function getPolicyLogits(stateArray) {
+    if (!onnxSession) return null;
+    
+    try {
+        // Create input tensor: (1, 4, 9, 9)
+        const inputTensor = new ort.Tensor('float32', stateArray, [1, 4, 9, 9]);
+        const feeds = { input: inputTensor };
+        
+        // Run inference
+        const predictions = await onnxSession.run(feeds);
+        const policyLogits = predictions.policy_logits.data; // (1, 81) flattened
+        
+        // Convert to array and extract first batch
+        return Array.from(policyLogits);
+    } catch (error) {
+        console.error('ONNX inference error:', error);
+        return null;
     }
-    return x;
 }
 
 function moveIndexToMove(idx) {
     return [Math.floor(idx / 9), idx % 9];
 }
 
-// --- AI: policy model only (no random fallback) ---
-function getAiMove() {
+// --- AI: ONNX model inference ---
+async function getAiMove() {
     const moves = getLegalMoves();
-    if (moves.length === 0 || !policyModel) return null;
-    const stateVec = encodeStateForModel();
-    const logits = policyForward(stateVec);
+    if (moves.length === 0 || !onnxSession) return null;
+    
+    const stateArray = encodeStateForModel();
+    const logits = await getPolicyLogits(stateArray);
+    if (!logits) return null;
+    
+    // Map model logits (9x9 board) to our move indices (big_idx * 9 + small_idx)
     const legalSet = new Set(moves.map(([i, j]) => i * 9 + j));
     let bestIdx = -1;
     let bestScore = -1e9;
+    
+    // Calculate probabilities for heatmap
+    const moveProbs = new Map();
+    const legalLogits = [];
+    const legalIndices = [];
+    
     for (let idx = 0; idx < MOVE_DIM; idx++) {
         if (!legalSet.has(idx)) continue;
-        if (logits[idx] > bestScore) {
-            bestScore = logits[idx];
+        const flatIdx = FLAT_INDEX_0[idx];
+        if (flatIdx < logits.length) {
+            legalLogits.push(logits[flatIdx]);
+            legalIndices.push(idx);
+            if (logits[flatIdx] > bestScore) {
+                bestScore = logits[flatIdx];
             bestIdx = idx;
         }
     }
+    }
+    
+    // Convert logits to probabilities using softmax
+    if (legalLogits.length > 0) {
+        const maxLogit = Math.max(...legalLogits);
+        const expLogits = legalLogits.map(l => Math.exp(l - maxLogit));
+        const sumExp = expLogits.reduce((a, b) => a + b, 0);
+        legalIndices.forEach((idx, i) => {
+            moveProbs.set(idx, expLogits[i] / sumExp);
+        });
+    }
+    
+    // Note: heatmap is updated separately via updateProbabilitiesForCurrentPlayer
     return bestIdx >= 0 ? moveIndexToMove(bestIdx) : null;
+}
+
+// Update probabilities for current player (works in all game modes)
+async function updateProbabilitiesForCurrentPlayer() {
+    if (!onnxSession || winner !== null) {
+        clearHeatmap();
+        return;
+    }
+    
+    const moves = getLegalMoves();
+    if (moves.length === 0) {
+        clearHeatmap();
+        return;
+    }
+    
+    const stateArray = encodeStateForModel();
+    const logits = await getPolicyLogits(stateArray);
+    if (!logits) {
+        clearHeatmap();
+        return;
+    }
+    
+    // Map model logits to move indices
+    const legalSet = new Set(moves.map(([i, j]) => i * 9 + j));
+    const moveProbs = new Map();
+    const legalLogits = [];
+    const legalIndices = [];
+    
+    for (let idx = 0; idx < MOVE_DIM; idx++) {
+        if (!legalSet.has(idx)) continue;
+        const flatIdx = FLAT_INDEX_0[idx];
+        if (flatIdx < logits.length) {
+            legalLogits.push(logits[flatIdx]);
+            legalIndices.push(idx);
+        }
+    }
+    
+    // Convert logits to probabilities using softmax
+    if (legalLogits.length > 0) {
+        const maxLogit = Math.max(...legalLogits);
+        const expLogits = legalLogits.map(l => Math.exp(l - maxLogit));
+        const sumExp = expLogits.reduce((a, b) => a + b, 0);
+        legalIndices.forEach((idx, i) => {
+            moveProbs.set(idx, expLogits[i] / sumExp);
+        });
+    }
+    
+    currentProbabilities = moveProbs;
+    updateHeatmap();
+}
+
+function updateHeatmap() {
+    if (!currentProbabilities || !showHeatmap) {
+        clearHeatmap();
+        return;
+    }
+    
+    // Find max probability for normalization
+    const maxProb = Math.max(...Array.from(currentProbabilities.values()));
+    
+    // Apply heatmap to each cell
+    currentProbabilities.forEach((prob, moveIdx) => {
+        const bigIdx = Math.floor(moveIdx / 9);
+        const smallIdx = moveIdx % 9;
+        const bigCell = document.getElementById('area')?.querySelector(`.bigCell[id="${bigIdx}"]`);
+        if (!bigCell) return;
+        
+        const smallCell = bigCell.querySelector(`.smallCell[id="${smallIdx}"]`);
+        if (!smallCell || smallCell.textContent !== '') return; // Skip occupied cells
+        
+        // Normalize probability (0-1) and convert to opacity/intensity
+        const intensity = maxProb > 0 ? prob / maxProb : 0;
+        const opacity = 0.3 + intensity * 0.5; // 0.3 to 0.8 opacity
+        
+        // Apply heatmap style
+        smallCell.style.backgroundColor = `rgba(125, 207, 255, ${opacity})`;
+        smallCell.style.setProperty('--heatmap-opacity', opacity);
+        smallCell.classList.add('heatmap-cell');
+        
+        // Add probability text (0 to 1)
+        const probValue = prob.toFixed(2);
+        if (!smallCell.querySelector('.prob-label')) {
+            const label = document.createElement('span');
+            label.className = 'prob-label';
+            label.textContent = probValue;
+            smallCell.appendChild(label);
+        } else {
+            smallCell.querySelector('.prob-label').textContent = probValue;
+        }
+    });
+}
+
+function clearHeatmap() {
+    const area = document.getElementById('area');
+    if (!area) return;
+    
+    area.querySelectorAll('.heatmap-cell').forEach(cell => {
+        cell.style.backgroundColor = '';
+        cell.style.setProperty('--heatmap-opacity', '');
+        cell.classList.remove('heatmap-cell');
+        const label = cell.querySelector('.prob-label');
+        if (label) label.remove();
+    });
+    currentProbabilities = null;
 }
 
 function scheduleAiMove() {
     if (aiTimeoutId) clearTimeout(aiTimeoutId);
-    aiTimeoutId = setTimeout(() => {
+    aiTimeoutId = setTimeout(async () => {
         aiTimeoutId = null;
-        const move = getAiMove();
-        if (move && winner === null) applyMove(move[0], move[1]);
+        const move = await getAiMove();
+        if (move && winner === null) {
+            applyMove(move[0], move[1]);
+        }
     }, 500);
 }
 
@@ -434,84 +594,6 @@ function cancelAiMove() {
         clearTimeout(aiTimeoutId);
         aiTimeoutId = null;
     }
-}
-
-function seekTo(step) {
-    if (!replayMode || !replayMoves.length) return;
-    step = Math.max(0, Math.min(step, replayMoves.length));
-    resetState();
-    buildBoard();
-    for (let i = 0; i < step; i++) {
-        const m = replayMoves[i];
-        if (Array.isArray(m) && m.length >= 2) applyMove(m[0], m[1]);
-    }
-    replayStep = step;
-    updateReplayUI();
-}
-
-function updateReplaySlider() {
-    const slider = document.getElementById('replaySlider');
-    if (!slider) return;
-    slider.max = String(replayMoves.length);
-    slider.value = String(replayStep);
-    slider.disabled = !replayMode || !replayMoves.length;
-}
-
-function updateReplayUI() {
-    const nextBtn = document.getElementById('nextReplay');
-    const prevBtn = document.getElementById('prevReplay');
-    const playBtn = document.getElementById('playReplay');
-    const pauseBtn = document.getElementById('pauseReplay');
-    const infoEl = document.getElementById('replayInfo');
-    if (!nextBtn || !infoEl) return;
-    updateReplaySlider();
-    if (replayMode) {
-        nextBtn.disabled = replayStep >= replayMoves.length;
-        if (prevBtn) prevBtn.disabled = replayStep <= 0;
-        const isPlaying = replayPlayInterval !== null;
-        if (playBtn) {
-            playBtn.disabled = replayStep >= replayMoves.length;
-            playBtn.classList.toggle('hidden', isPlaying);
-        }
-        if (pauseBtn) pauseBtn.classList.toggle('hidden', !isPlaying);
-        if (replayResult && replayStep >= replayMoves.length) infoEl.textContent = `Finished: ${replayResult}`;
-        else infoEl.textContent = `Step ${replayStep} / ${replayMoves.length}`;
-    } else {
-        nextBtn.disabled = true;
-        if (prevBtn) prevBtn.disabled = true;
-        if (playBtn) { playBtn.disabled = true; playBtn.classList.remove('hidden'); }
-        if (pauseBtn) pauseBtn.classList.add('hidden');
-        infoEl.textContent = '';
-    }
-}
-
-function startReplayPlayback() {
-    if (replayPlayInterval) return;
-    const playBtn = document.getElementById('playReplay');
-    const pauseBtn = document.getElementById('pauseReplay');
-    if (playBtn) playBtn.classList.add('hidden');
-    if (pauseBtn) pauseBtn.classList.remove('hidden');
-    replayPlayInterval = setInterval(() => {
-        if (replayStep >= replayMoves.length) {
-            pauseReplayPlayback();
-            return;
-        }
-        const m = replayMoves[replayStep];
-        if (Array.isArray(m) && m.length >= 2) applyMove(m[0], m[1]);
-        replayStep++;
-        updateReplayUI();
-    }, REPLAY_SPEED_MS);
-}
-
-function pauseReplayPlayback() {
-    if (replayPlayInterval) {
-        clearInterval(replayPlayInterval);
-        replayPlayInterval = null;
-    }
-    const playBtn = document.getElementById('playReplay');
-    const pauseBtn = document.getElementById('pauseReplay');
-    if (playBtn) playBtn.classList.remove('hidden');
-    if (pauseBtn) pauseBtn.classList.add('hidden');
 }
 
 // --- Online multiplayer (WebRTC via PeerJS) ---
@@ -628,7 +710,7 @@ function createRoom() {
                     alert('Room ID is already in use. Please create a new room.');
                 });
             }, 1000);
-        } else {
+    } else {
             alert('Connection error: ' + err.message);
         }
     });
@@ -637,8 +719,8 @@ function createRoom() {
 function joinRoomById(id, selectedRole = null) {
     if (typeof Peer === 'undefined') {
         alert('PeerJS library not loaded. Please refresh the page.');
-        return;
-    }
+            return;
+        }
     
     if (peer) {
         peer.destroy();
@@ -920,7 +1002,6 @@ function restoreRoomState(savedState) {
 // --- Events ---
 document.getElementById('area')?.addEventListener('click', (e) => {
     if (!e.target.classList.contains('smallCell')) return;
-    if (replayMode) return;
     if (gameMode === 'ai' && player !== humanSide) return; // not human's turn
     if (gameMode === 'online' && (player !== onlineRole || onlineRole === 'spectator')) return; // not your turn or spectator
     const bigCell = e.target.closest('.bigCell');
@@ -932,21 +1013,15 @@ document.getElementById('area')?.addEventListener('click', (e) => {
 
 document.getElementById('newGame')?.addEventListener('click', () => {
     cancelAiMove();
-    pauseReplayPlayback();
-    replayMode = false;
-    replayMoves = [];
-    replayStep = 0;
-    replayResult = null;
-    updateReplayUI();
     if (gameMode === 'online' && peerConnection && peerConnection.open) {
         peerConnection.send(JSON.stringify({ type: 'reset' }));
         resetState();
         buildBoard();
     } else {
-        resetState();
-        buildBoard();
-        saveState();
-        if (gameMode === 'ai' && humanSide === 'O') scheduleAiMove(); // X goes first
+    resetState();
+    buildBoard();
+    saveState();
+    if (gameMode === 'ai' && humanSide === 'O') scheduleAiMove(); // X goes first
     }
 });
 
@@ -1029,83 +1104,46 @@ document.getElementById('sideO')?.addEventListener('click', () => {
     updateStatus();
 });
 
-function loadReplayList() {
-    const select = document.getElementById('replayList');
-    if (!select) return;
-    select.disabled = true;
-    select.innerHTML = '<option value="">Loading…</option>';
-    fetch('replays/list.json')
-        .then((r) => (r.ok ? r.json() : Promise.reject(new Error('No list'))))
-        .then((list) => {
-            replayListData = Array.isArray(list) ? list : [];
-            select.innerHTML = '<option value="">— Choose replay —</option>';
-            replayListData.forEach((entry, idx) => {
-                const opt = document.createElement('option');
-                opt.value = entry.file || '';
-                opt.textContent = `${entry.file || 'replay'} — ${entry.result || '?'} (${entry.steps || 0} moves)`;
-                select.appendChild(opt);
-            });
-            select.disabled = false;
-        })
-        .catch(() => {
-            select.innerHTML = '<option value="">— Run server to see list —</option>';
-            select.disabled = false;
-        });
-}
-
-document.getElementById('refreshReplayList')?.addEventListener('click', loadReplayList);
-
-document.getElementById('replayList')?.addEventListener('change', (e) => {
-    const file = e.target?.value;
-    if (!file) return;
-    pauseReplayPlayback();
-    fetch('replays/' + file)
-        .then((r) => (r.ok ? r.json() : Promise.reject(new Error('Load failed'))))
-        .then((data) => {
-            if (!Array.isArray(data.moves)) throw new Error('Invalid format');
-            cancelAiMove();
-            replayMode = true;
-            replayMoves = data.moves;
-            replayStep = 0;
-            replayResult = data.result || null;
-            seekTo(0);
-            updateReplayUI();
-        })
-        .catch((err) => alert('Replay load failed: ' + (err.message || err)));
-});
-
-document.getElementById('playReplay')?.addEventListener('click', startReplayPlayback);
-document.getElementById('pauseReplay')?.addEventListener('click', pauseReplayPlayback);
-
-document.getElementById('prevReplay')?.addEventListener('click', () => {
-    if (replayMode) { pauseReplayPlayback(); seekTo(replayStep - 1); }
-});
-
-document.getElementById('nextReplay')?.addEventListener('click', () => {
-    if (!replayMode || replayStep >= replayMoves.length) return;
-    const move = replayMoves[replayStep];
-    if (Array.isArray(move) && move.length >= 2) applyMove(move[0], move[1]);
-    replayStep++;
-    updateReplayUI();
-});
-
-document.getElementById('replaySlider')?.addEventListener('input', (e) => {
-    const v = parseInt(e.target.value, 10);
-    if (!Number.isNaN(v) && replayMode) { pauseReplayPlayback(); seekTo(v); }
-});
-
-// --- Load policy model for AI ---
-function loadPolicyModel() {
-    fetch('model/weights.json')
-        .then((r) => (r.ok ? r.json() : Promise.reject(new Error('Not found'))))
-        .then((data) => {
-            policyModel = data;
-        })
-        .catch(() => {});
+// --- Load ONNX model for AI ---
+async function loadPolicyModel() {
+    if (typeof ort === 'undefined') {
+        console.error('ONNX Runtime not loaded');
+        return;
+    }
+    
+    try {
+        // Try model/ first (for GitHub Pages), then ../model/ (for local dev)
+        try {
+            onnxSession = await ort.InferenceSession.create('model/policy_value_net.onnx');
+        } catch (e) {
+            onnxSession = await ort.InferenceSession.create('../model/policy_value_net.onnx');
+        }
+        console.log('ONNX model loaded successfully');
+    } catch (error) {
+        console.error('Failed to load ONNX model:', error);
+        console.log('Make sure model/policy_value_net.onnx exists');
+    }
 }
 
 loadPolicyModel();
-loadReplayList();
+
+// --- Heatmap toggle ---
+document.getElementById('heatmapToggle')?.addEventListener('click', () => {
+    showHeatmap = true;
+    document.getElementById('heatmapToggle').classList.add('active');
+    document.querySelector('[data-heatmap="off"]')?.classList.remove('active');
+    // Update probabilities when enabling
+    if (onnxSession && winner === null) {
+        updateProbabilitiesForCurrentPlayer();
+    }
+});
+
+document.querySelector('[data-heatmap="off"]')?.addEventListener('click', () => {
+    showHeatmap = false;
+    document.getElementById('heatmapToggle')?.classList.remove('active');
+    document.querySelector('[data-heatmap="off"]').classList.add('active');
+    clearHeatmap();
+});
 
 // Check for room ID in URL
 const urlParams = new URLSearchParams(window.location.search);

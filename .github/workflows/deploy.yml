@@ -1,4 +1,4 @@
-# Deploy frontend to GitHub Pages (uses existing model from frontend/model/weights.json)
+# Deploy frontend to GitHub Pages (uses ONNX model from model/policy_value_net.onnx)
 # Runs when frontend files change or manually triggered
 name: Deploy to GitHub Pages
 
@@ -10,7 +10,6 @@ on:
       - 'frontend/script.js'
       - 'frontend/style.css'
       - 'frontend/favicon.ico'
-      - 'frontend/replays/**'
       - '.github/workflows/deploy.yml'
   workflow_dispatch:
 
@@ -29,15 +28,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Check if model exists
+      - name: Check and copy ONNX model
         id: check_model
         run: |
-          if [ -f "frontend/model/weights.json" ]; then
+          if [ -f "model/policy_value_net.onnx" ]; then
             echo "exists=true" >> $GITHUB_OUTPUT
-            echo "Model found: frontend/model/weights.json"
+            echo "ONNX model found: model/policy_value_net.onnx"
+            mkdir -p frontend/model
+            cp model/policy_value_net.onnx frontend/model/policy_value_net.onnx
+            echo "Model copied to frontend/model/policy_value_net.onnx"
           else
             echo "exists=false" >> $GITHUB_OUTPUT
-            echo "Warning: frontend/model/weights.json not found. AI will play randomly."
+            echo "Warning: model/policy_value_net.onnx not found. AI mode will not work."
+            echo "Copy model to model/policy_value_net.onnx"
           fi
 
       - name: Upload Pages artifact
