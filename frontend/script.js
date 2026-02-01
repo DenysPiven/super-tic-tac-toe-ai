@@ -529,7 +529,7 @@ function createRoom() {
         peer.destroy();
     }
     
-    // Use existing roomId if restoring, otherwise generate new
+    // Generate new roomId if not restoring
     if (!roomId) {
         roomId = generateRoomId();
     }
@@ -541,6 +541,8 @@ function createRoom() {
         creatorRole = onlineRole;
     }
     
+    // Use roomId as Peer ID - this allows clients to connect using roomId
+    // If ID is taken on reconnect, we'll handle it in error handler
     peer = new Peer(roomId, {
         host: '0.peerjs.com',
         port: 443,
@@ -554,23 +556,25 @@ function createRoom() {
         document.getElementById('creatorRole').classList.remove('hidden');
         document.getElementById('roomInfo').classList.remove('hidden');
         document.getElementById('joinForm').classList.add('hidden');
-        document.getElementById('roleSelection').classList.add('hidden');
+        document.getElementById('roleModal').classList.add('hidden');
         document.getElementById('roomStatus').textContent = 'Waiting for opponent...';
+        // Save state with actual Peer ID
         saveRoomState();
         updateStatus();
     });
     
     peer.on('connection', (conn) => {
         peerConnection = conn;
-        peerConnection.on('open', () => {
-            // Send creator role and game state
-            peerConnection.send(JSON.stringify({
-                type: 'creator_role',
-                role: creatorRole
-            }));
-            document.getElementById('roomStatus').textContent = 'Connected! You are ' + creatorRole;
-            sendGameState();
-        });
+            peerConnection.on('open', () => {
+                // Send creator role (with Peer ID for reconnection) and game state
+                peerConnection.send(JSON.stringify({
+                    type: 'creator_role',
+                    role: creatorRole,
+                    peerId: peer.id
+                }));
+                document.getElementById('roomStatus').textContent = 'Connected! You are ' + creatorRole;
+                sendGameState();
+            });
         peerConnection.on('data', handlePeerData);
         peerConnection.on('close', () => {
             document.getElementById('roomStatus').textContent = 'Opponent disconnected';
@@ -579,7 +583,54 @@ function createRoom() {
     });
     
     peer.on('error', (err) => {
-        alert('Connection error: ' + err.message);
+        // If ID is taken (on reconnect), wait a bit and try again with roomId
+        // This can happen if the previous connection hasn't fully closed yet
+        if (err.type === 'peer-unavailable' || err.message.includes('taken') || err.message.includes('ID')) {
+            document.getElementById('roomStatus').textContent = 'Reconnecting...';
+            setTimeout(() => {
+                peer.destroy();
+                peer = new Peer(roomId, {
+                    host: '0.peerjs.com',
+                    port: 443,
+                    path: '/',
+                    secure: true
+                });
+                peer.on('open', (id) => {
+                    document.getElementById('roomIdDisplay').textContent = roomId;
+                    document.getElementById('creatorRoleDisplay').textContent = creatorRole;
+                    document.getElementById('creatorRole').classList.remove('hidden');
+                    document.getElementById('roomInfo').classList.remove('hidden');
+                    document.getElementById('joinForm').classList.add('hidden');
+                    document.getElementById('roleModal').classList.add('hidden');
+                    document.getElementById('roomStatus').textContent = 'Waiting for opponent...';
+                    saveRoomState();
+                    updateStatus();
+                });
+                peer.on('connection', (conn) => {
+                    peerConnection = conn;
+                    peerConnection.on('open', () => {
+                        peerConnection.send(JSON.stringify({
+                            type: 'creator_role',
+                            role: creatorRole,
+                            peerId: peer.id
+                        }));
+                        document.getElementById('roomStatus').textContent = 'Connected! You are ' + creatorRole;
+                        sendGameState();
+                    });
+                    peerConnection.on('data', handlePeerData);
+                    peerConnection.on('close', () => {
+                        document.getElementById('roomStatus').textContent = 'Opponent disconnected';
+                        peerConnection = null;
+                    });
+                });
+                peer.on('error', (err2) => {
+                    document.getElementById('roomStatus').textContent = 'Room ID is taken. Please create a new room.';
+                    alert('Room ID is already in use. Please create a new room.');
+                });
+            }, 1000);
+        } else {
+            alert('Connection error: ' + err.message);
+        }
     });
 }
 
@@ -618,7 +669,11 @@ function joinRoomById(id, selectedRole = null) {
     });
     
     peer.on('open', () => {
-        peerConnection = peer.connect(roomId);
+        // Try connecting to roomId first (host uses roomId as Peer ID)
+        // If we have saved peerId, try that too as fallback
+        const savedState = loadRoomState(id);
+        const peerIdToConnect = savedState?.peerId || roomId;
+        peerConnection = peer.connect(peerIdToConnect);
         
         if (peerConnection) {
             peerConnection.on('open', () => {
@@ -629,7 +684,7 @@ function joinRoomById(id, selectedRole = null) {
                 }
                 document.getElementById('roomInfo').classList.remove('hidden');
                 document.getElementById('joinForm').classList.add('hidden');
-                document.getElementById('roleSelection').classList.add('hidden');
+                document.getElementById('roleModal').classList.add('hidden');
                 document.getElementById('roomStatus').textContent = 'Connected! You are ' + onlineRole;
                 saveRoomState();
                 updateStatus();
@@ -644,9 +699,15 @@ function joinRoomById(id, selectedRole = null) {
     
     peer.on('error', (err) => {
         if (err.type === 'peer-unavailable') {
-            alert('Room not found. Please check the room ID.');
+            document.getElementById('roomStatus').textContent = 'Room not found. Please check the room ID.';
+            setTimeout(() => {
+                alert('Room not found. Please check the room ID.');
+            }, 100);
         } else {
-            alert('Connection error: ' + err.message);
+            document.getElementById('roomStatus').textContent = 'Connection error: ' + err.message;
+            setTimeout(() => {
+                alert('Connection error: ' + err.message);
+            }, 100);
         }
     });
 }
@@ -654,12 +715,12 @@ function joinRoomById(id, selectedRole = null) {
 function showRoleSelection(creatorRoleValue) {
     creatorRole = creatorRoleValue;
     document.getElementById('joinForm').classList.add('hidden');
-    document.getElementById('roleSelection').classList.remove('hidden');
+    document.getElementById('roleModal').classList.remove('hidden');
     if (creatorRole) {
         document.getElementById('creatorInfo').textContent = `Room creator plays: ${creatorRole}`;
     }
     // Highlight available roles
-    const roleButtons = document.querySelectorAll('#roleSelection .btn-mode');
+    const roleButtons = document.querySelectorAll('#roleModal .btn-mode');
     roleButtons.forEach(btn => {
         btn.classList.remove('active');
         const role = btn.dataset.role;
@@ -678,12 +739,13 @@ function showRoleSelection(creatorRoleValue) {
 function selectRole(role) {
     if (pendingRoomId) {
         // Update button states
-        document.querySelectorAll('#roleSelection .btn-mode').forEach(btn => {
+        document.querySelectorAll('#roleModal .btn-mode').forEach(btn => {
             btn.classList.remove('active');
             if (btn.dataset.role === role) {
                 btn.classList.add('active');
             }
         });
+        document.getElementById('roleModal').classList.add('hidden');
         joinRoomById(pendingRoomId, role);
         pendingRoomId = null;
     }
@@ -705,6 +767,14 @@ function handlePeerData(data) {
             if (document.getElementById('creatorRoleDisplay')) {
                 document.getElementById('creatorRoleDisplay').textContent = creatorRole;
                 document.getElementById('creatorRole').classList.remove('hidden');
+            }
+            // If host sent their Peer ID, save it for reconnection
+            if (msg.peerId) {
+                const savedState = loadRoomState(roomId);
+                if (savedState) {
+                    savedState.peerId = msg.peerId;
+                    localStorage.setItem(`room_${roomId}`, JSON.stringify(savedState));
+                }
             }
             saveRoomState();
         }
@@ -765,7 +835,7 @@ function leaveRoom() {
     pendingRoomId = null;
     document.getElementById('roomInfo').classList.add('hidden');
     document.getElementById('joinForm').classList.add('hidden');
-    document.getElementById('roleSelection').classList.add('hidden');
+    document.getElementById('roleModal').classList.add('hidden');
     if (gameMode === 'online') {
         resetState();
         buildBoard();
@@ -791,6 +861,7 @@ function saveRoomState() {
             creatorRole,
             onlineRole,
             isHost,
+            peerId: peer?.id || null, // Save actual Peer ID for reconnection
             gameState: {
                 big: [...big],
                 small: small.map(row => [...row]),
@@ -1048,20 +1119,30 @@ if (roomParam) {
     if (savedState) {
         // Restore saved state
         restoreRoomState(savedState);
+        // Show room info immediately
+        document.getElementById('roomIdDisplay').textContent = savedState.roomId;
+        if (savedState.creatorRole) {
+            document.getElementById('creatorRoleDisplay').textContent = savedState.creatorRole;
+            document.getElementById('creatorRole').classList.remove('hidden');
+        }
+        document.getElementById('roomInfo').classList.remove('hidden');
+        document.getElementById('roomStatus').textContent = 'Reconnecting...';
         // Try to reconnect
         setTimeout(() => {
             if (savedState.isHost) {
                 // Restore as host - recreate room with same ID
+                // Note: Peer ID will be different, but roomId stays the same
                 roomId = savedState.roomId;
                 creatorRole = savedState.creatorRole;
                 onlineRole = savedState.onlineRole;
                 isHost = true;
                 createRoom();
             } else {
-                // Restore as client - show role selection or reconnect
-                if (savedState.onlineRole) {
+                // Restore as client - reconnect with saved role
+                if (savedState.onlineRole && savedState.onlineRole !== 'spectator') {
                     joinRoomById(roomParam, savedState.onlineRole);
                 } else {
+                    // Show role selection if no role saved or was spectator
                     showRoleSelection(savedState.creatorRole);
                     pendingRoomId = roomParam.toUpperCase();
                 }

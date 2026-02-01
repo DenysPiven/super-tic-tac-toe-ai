@@ -41,14 +41,20 @@
                         <input type="text" id="roomIdInput" placeholder="Enter room ID" maxlength="6" style="text-transform: uppercase;">
                         <button type="button" id="joinRoomBtn" class="btn-new">Join</button>
                     </div>
-                    <div id="roleSelection" class="role-selection hidden">
-                        <div class="role-selection-title">Choose your role:</div>
-                        <div class="btn-group">
-                            <button type="button" id="selectRoleX" class="btn-mode" data-role="X">X</button>
-                            <button type="button" id="selectRoleO" class="btn-mode" data-role="O">O</button>
-                            <button type="button" id="selectRoleSpectator" class="btn-mode" data-role="spectator">Spectator</button>
+                </div>
+                <div id="roleModal" class="modal hidden">
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <h3>Choose your role</h3>
                         </div>
-                        <div id="creatorInfo" class="creator-info"></div>
+                        <div class="modal-body">
+                            <div id="creatorInfo" class="creator-info"></div>
+                            <div class="btn-group" style="justify-content: center; margin-top: 1rem;">
+                                <button type="button" id="selectRoleX" class="btn-mode" data-role="X">X</button>
+                                <button type="button" id="selectRoleO" class="btn-mode" data-role="O">O</button>
+                                <button type="button" id="selectRoleSpectator" class="btn-mode" data-role="spectator">Spectator</button>
+                            </div>
+                        </div>
                     </div>
                 </div>
                 <div id="sideRow" class="side-row hidden">
