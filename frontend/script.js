@@ -894,6 +894,21 @@ function loadPolicyModel() {
         .catch(() => {});
 }
 
+// Debug: Check if all elements exist on page load
+console.log('=== Page Load Debug ===');
+console.log('Document ready state:', document.readyState);
+console.log('modeOnline button:', document.getElementById('modeOnline'));
+console.log('modeTwo button:', document.getElementById('modeTwo'));
+console.log('modeAi button:', document.getElementById('modeAi'));
+console.log('onlinePanel:', document.getElementById('onlinePanel'));
+console.log('PeerJS loaded:', typeof Peer !== 'undefined');
+if (typeof Peer === 'undefined') {
+    console.warn('⚠️ PeerJS not loaded yet, waiting...');
+    window.addEventListener('load', () => {
+        console.log('Page loaded, PeerJS:', typeof Peer !== 'undefined');
+    });
+}
+
 loadPolicyModel();
 loadReplayList();
 
