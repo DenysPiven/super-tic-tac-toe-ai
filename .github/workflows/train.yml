@@ -1,13 +1,8 @@
 # Train model and export to frontend/model/weights.json
-# Runs only when training files change or manually triggered
+# Runs only when manually triggered (workflow_dispatch)
 name: Train Model
 
 on:
-  push:
-    branches: [master]
-    paths:
-      - 'training/**'
-      - '.github/workflows/train.yml'
   workflow_dispatch:
     inputs:
       games:
