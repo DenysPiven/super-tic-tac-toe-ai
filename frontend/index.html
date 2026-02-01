@@ -32,11 +32,23 @@
                             <button type="button" id="copyRoomId" class="btn-icon" title="Copy link">📋</button>
                         </div>
                         <div id="roomStatus" class="room-status"></div>
+                        <div id="creatorRole" class="creator-role hidden">
+                            <span>Creator plays: <strong id="creatorRoleDisplay"></strong></span>
+                        </div>
                         <button type="button" id="leaveRoom" class="btn-new">Leave room</button>
                     </div>
                     <div id="joinForm" class="join-form hidden">
                         <input type="text" id="roomIdInput" placeholder="Enter room ID" maxlength="6" style="text-transform: uppercase;">
                         <button type="button" id="joinRoomBtn" class="btn-new">Join</button>
+                    </div>
+                    <div id="roleSelection" class="role-selection hidden">
+                        <div class="role-selection-title">Choose your role:</div>
+                        <div class="btn-group">
+                            <button type="button" id="selectRoleX" class="btn-mode" data-role="X">X</button>
+                            <button type="button" id="selectRoleO" class="btn-mode" data-role="O">O</button>
+                            <button type="button" id="selectRoleSpectator" class="btn-mode" data-role="spectator">Spectator</button>
+                        </div>
+                        <div id="creatorInfo" class="creator-info"></div>
                     </div>
                 </div>
                 <div id="sideRow" class="side-row hidden">

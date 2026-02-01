@@ -38,9 +38,11 @@ let lastMove = null; // [bigIdx, smallIdx] of last played cell, or null
 // Online multiplayer (WebRTC via PeerJS)
 let peer = null;
 let peerConnection = null;
-let onlineRole = null; // 'X' | 'O' | null
+let onlineRole = null; // 'X' | 'O' | 'spectator' | null
 let roomId = null;
 let isHost = false;
+let creatorRole = null; // Role of room creator
+let pendingRoomId = null; // Room ID waiting for role selection
 
 let replayMode = false;
 let replayMoves = [];
@@ -126,7 +128,9 @@ function updateStatus() {
     else if (winner === 'O') statusEl.textContent = "O wins!";
     else if (winner === 'draw') statusEl.textContent = "Draw!";
     else if (gameMode === 'online') {
-        if (!peerConnection || !peerConnection.open) {
+        if (onlineRole === 'spectator') {
+            statusEl.textContent = `Watching: ${player}'s turn`;
+        } else if (!peerConnection || !peerConnection.open) {
             statusEl.textContent = onlineRole ? `Connecting... (You are ${onlineRole})` : "Not connected";
         } else if (player !== onlineRole) {
             statusEl.textContent = `Waiting for opponent... (You are ${onlineRole})`;
@@ -330,9 +334,10 @@ function applyMove(bigIdx, smallIdx, skipOnline = false) {
     updateStatus();
     if (!replayMode) saveState();
     
-    // Send state to peer in online mode
+    // Send state to peer in online mode and save room state
     if (gameMode === 'online' && peerConnection && peerConnection.open) {
         sendGameState();
+        saveRoomState();
     }
 
     // If vs AI and it's AI's turn, schedule AI move (not in replay)
@@ -524,9 +529,17 @@ function createRoom() {
         peer.destroy();
     }
     
-    roomId = generateRoomId();
+    // Use existing roomId if restoring, otherwise generate new
+    if (!roomId) {
+        roomId = generateRoomId();
+    }
     isHost = true;
-    onlineRole = 'X';
+    if (!onlineRole) {
+        onlineRole = 'X';
+    }
+    if (!creatorRole) {
+        creatorRole = onlineRole;
+    }
     
     peer = new Peer(roomId, {
         host: '0.peerjs.com',
@@ -537,17 +550,25 @@ function createRoom() {
     
     peer.on('open', (id) => {
         document.getElementById('roomIdDisplay').textContent = roomId;
+        document.getElementById('creatorRoleDisplay').textContent = creatorRole;
+        document.getElementById('creatorRole').classList.remove('hidden');
         document.getElementById('roomInfo').classList.remove('hidden');
         document.getElementById('joinForm').classList.add('hidden');
+        document.getElementById('roleSelection').classList.add('hidden');
         document.getElementById('roomStatus').textContent = 'Waiting for opponent...';
+        saveRoomState();
         updateStatus();
     });
     
     peer.on('connection', (conn) => {
         peerConnection = conn;
         peerConnection.on('open', () => {
-            document.getElementById('roomStatus').textContent = 'Connected! You are X';
-            // Send initial state
+            // Send creator role and game state
+            peerConnection.send(JSON.stringify({
+                type: 'creator_role',
+                role: creatorRole
+            }));
+            document.getElementById('roomStatus').textContent = 'Connected! You are ' + creatorRole;
             sendGameState();
         });
         peerConnection.on('data', handlePeerData);
@@ -558,12 +579,11 @@ function createRoom() {
     });
     
     peer.on('error', (err) => {
-        console.error('Peer error:', err);
         alert('Connection error: ' + err.message);
     });
 }
 
-function joinRoomById(id) {
+function joinRoomById(id, selectedRole = null) {
     if (typeof Peer === 'undefined') {
         alert('PeerJS library not loaded. Please refresh the page.');
         return;
@@ -575,7 +595,20 @@ function joinRoomById(id) {
     
     roomId = id.toUpperCase();
     isHost = false;
-    onlineRole = 'O';
+    
+    // If no role selected, show selection UI
+    if (!selectedRole) {
+        const savedState = loadRoomState(id);
+        if (savedState && savedState.creatorRole) {
+            pendingRoomId = id.toUpperCase();
+            showRoleSelection(savedState.creatorRole);
+            return;
+        }
+        // Default to O if no saved state
+        onlineRole = 'O';
+    } else {
+        onlineRole = selectedRole;
+    }
     
     peer = new Peer(undefined, {
         host: '0.peerjs.com',
@@ -590,9 +623,15 @@ function joinRoomById(id) {
         if (peerConnection) {
             peerConnection.on('open', () => {
                 document.getElementById('roomIdDisplay').textContent = roomId;
+                if (creatorRole) {
+                    document.getElementById('creatorRoleDisplay').textContent = creatorRole;
+                    document.getElementById('creatorRole').classList.remove('hidden');
+                }
                 document.getElementById('roomInfo').classList.remove('hidden');
                 document.getElementById('joinForm').classList.add('hidden');
-                document.getElementById('roomStatus').textContent = 'Connected! You are O';
+                document.getElementById('roleSelection').classList.add('hidden');
+                document.getElementById('roomStatus').textContent = 'Connected! You are ' + onlineRole;
+                saveRoomState();
                 updateStatus();
             });
             peerConnection.on('data', handlePeerData);
@@ -604,13 +643,50 @@ function joinRoomById(id) {
     });
     
     peer.on('error', (err) => {
-        console.error('Peer error:', err);
         if (err.type === 'peer-unavailable') {
             alert('Room not found. Please check the room ID.');
         } else {
             alert('Connection error: ' + err.message);
         }
     });
+}
+
+function showRoleSelection(creatorRoleValue) {
+    creatorRole = creatorRoleValue;
+    document.getElementById('joinForm').classList.add('hidden');
+    document.getElementById('roleSelection').classList.remove('hidden');
+    if (creatorRole) {
+        document.getElementById('creatorInfo').textContent = `Room creator plays: ${creatorRole}`;
+    }
+    // Highlight available roles
+    const roleButtons = document.querySelectorAll('#roleSelection .btn-mode');
+    roleButtons.forEach(btn => {
+        btn.classList.remove('active');
+        const role = btn.dataset.role;
+        if (role === creatorRole) {
+            btn.style.opacity = '0.5';
+            btn.style.cursor = 'not-allowed';
+            btn.disabled = true;
+        } else {
+            btn.style.opacity = '1';
+            btn.style.cursor = 'pointer';
+            btn.disabled = false;
+        }
+    });
+}
+
+function selectRole(role) {
+    if (pendingRoomId) {
+        // Update button states
+        document.querySelectorAll('#roleSelection .btn-mode').forEach(btn => {
+            btn.classList.remove('active');
+            if (btn.dataset.role === role) {
+                btn.classList.add('active');
+            }
+        });
+        joinRoomById(pendingRoomId, role);
+        pendingRoomId = null;
+    }
 }
 
 function handlePeerData(data) {
@@ -624,9 +700,16 @@ function handlePeerData(data) {
         } else if (msg.type === 'reset') {
             resetState();
             buildBoard();
+        } else if (msg.type === 'creator_role') {
+            creatorRole = msg.role;
+            if (document.getElementById('creatorRoleDisplay')) {
+                document.getElementById('creatorRoleDisplay').textContent = creatorRole;
+                document.getElementById('creatorRole').classList.remove('hidden');
+            }
+            saveRoomState();
         }
     } catch (e) {
-        console.error('Error handling peer data:', e);
+        // Error handling peer data
     }
 }
 
@@ -671,11 +754,18 @@ function leaveRoom() {
         peer.destroy();
         peer = null;
     }
+    // Clear saved room state
+    if (roomId) {
+        localStorage.removeItem(`room_${roomId}`);
+    }
     roomId = null;
     onlineRole = null;
+    creatorRole = null;
     isHost = false;
+    pendingRoomId = null;
     document.getElementById('roomInfo').classList.add('hidden');
     document.getElementById('joinForm').classList.add('hidden');
+    document.getElementById('roleSelection').classList.add('hidden');
     if (gameMode === 'online') {
         resetState();
         buildBoard();
@@ -693,12 +783,75 @@ function copyRoomLink() {
     });
 }
 
+function saveRoomState() {
+    if (!roomId) return;
+    try {
+        const state = {
+            roomId,
+            creatorRole,
+            onlineRole,
+            isHost,
+            gameState: {
+                big: [...big],
+                small: small.map(row => [...row]),
+                player,
+                availableBig,
+                winner,
+                lastMove
+            }
+        };
+        localStorage.setItem(`room_${roomId}`, JSON.stringify(state));
+    } catch (e) {
+        // Ignore storage errors
+    }
+}
+
+function loadRoomState(roomIdToLoad) {
+    if (!roomIdToLoad) return null;
+    try {
+        const saved = localStorage.getItem(`room_${roomIdToLoad.toUpperCase()}`);
+        if (saved) {
+            return JSON.parse(saved);
+        }
+    } catch (e) {
+        // Ignore parse errors
+    }
+    return null;
+}
+
+function restoreRoomState(savedState) {
+    if (!savedState) return;
+    roomId = savedState.roomId;
+    creatorRole = savedState.creatorRole;
+    onlineRole = savedState.onlineRole;
+    isHost = savedState.isHost;
+    
+    if (savedState.gameState) {
+        const gs = savedState.gameState;
+        for (let i = 0; i < 9; i++) {
+            big[i] = gs.big[i] || '';
+        }
+        for (let i = 0; i < 9; i++) {
+            for (let j = 0; j < 9; j++) {
+                small[i][j] = gs.small[i][j] || '';
+            }
+        }
+        player = gs.player || 'X';
+        availableBig = gs.availableBig !== undefined ? gs.availableBig : -1;
+        winner = gs.winner || null;
+        lastMove = gs.lastMove || null;
+        buildBoard();
+        updateAvailability();
+        updateStatus();
+    }
+}
+
 // --- Events ---
 document.getElementById('area')?.addEventListener('click', (e) => {
     if (!e.target.classList.contains('smallCell')) return;
     if (replayMode) return;
     if (gameMode === 'ai' && player !== humanSide) return; // not human's turn
-    if (gameMode === 'online' && player !== onlineRole) return; // not your turn in online
+    if (gameMode === 'online' && (player !== onlineRole || onlineRole === 'spectator')) return; // not your turn or spectator
     const bigCell = e.target.closest('.bigCell');
     if (!bigCell) return;
     const i = parseInt(bigCell.id, 10);
@@ -735,44 +888,16 @@ document.getElementById('modeTwo')?.addEventListener('click', () => {
     updateStatus();
 });
 
-// Add event listener for Online mode button
-(function() {
-    const btn = document.getElementById('modeOnline');
-    console.log('=== Online Button Debug ===');
-    console.log('Button element:', btn);
-    
-    if (!btn) {
-        console.error('❌ modeOnline button NOT FOUND in DOM!');
-        console.log('Available buttons:', document.querySelectorAll('button[id*="mode"]'));
+document.getElementById('modeOnline')?.addEventListener('click', () => {
+    if (typeof Peer === 'undefined') {
+        alert('PeerJS library not loaded. Please check your internet connection and refresh the page.');
         return;
     }
-    
-    console.log('✅ modeOnline button found');
-    console.log('Button classes:', btn.className);
-    console.log('Button text:', btn.textContent);
-    
-    btn.addEventListener('click', function(e) {
-        console.log('🖱️ Online button CLICKED!');
-        console.log('Event:', e);
-        console.log('PeerJS available:', typeof Peer !== 'undefined');
-        
-        if (typeof Peer === 'undefined') {
-            alert('PeerJS library not loaded. Please check your internet connection and refresh the page.');
-            console.error('❌ PeerJS not available');
-            return;
-        }
-        
-        console.log('✅ PeerJS is available, switching to online mode');
-        cancelAiMove();
-        gameMode = 'online';
-        console.log('Game mode set to:', gameMode);
-        syncModeUI();
-        updateStatus();
-        console.log('✅ Online mode activated');
-    });
-    
-    console.log('✅ Event listener added to modeOnline button');
-})();
+    cancelAiMove();
+    gameMode = 'online';
+    syncModeUI();
+    updateStatus();
+});
 
 document.getElementById('modeAi')?.addEventListener('click', () => {
     cancelAiMove();
@@ -790,11 +915,25 @@ document.getElementById('joinRoom')?.addEventListener('click', () => {
 document.getElementById('joinRoomBtn')?.addEventListener('click', () => {
     const roomId = document.getElementById('roomIdInput').value.trim().toUpperCase();
     if (roomId.length === 6) {
-        joinRoomById(roomId);
+        // Check for saved state first
+        const savedState = loadRoomState(roomId);
+        if (savedState && savedState.creatorRole) {
+            // Show role selection with creator info
+            pendingRoomId = roomId;
+            showRoleSelection(savedState.creatorRole);
+        } else {
+            // No saved state, connect and wait for creator role
+            pendingRoomId = roomId;
+            joinRoomById(roomId, null);
+        }
     } else {
         alert('Room ID must be 6 characters');
     }
 });
+
+document.getElementById('selectRoleX')?.addEventListener('click', () => selectRole('X'));
+document.getElementById('selectRoleO')?.addEventListener('click', () => selectRole('O'));
+document.getElementById('selectRoleSpectator')?.addEventListener('click', () => selectRole('spectator'));
 document.getElementById('roomIdInput')?.addEventListener('keypress', (e) => {
     if (e.key === 'Enter') {
         document.getElementById('joinRoomBtn').click();
@@ -894,21 +1033,6 @@ function loadPolicyModel() {
         .catch(() => {});
 }
 
-// Debug: Check if all elements exist on page load
-console.log('=== Page Load Debug ===');
-console.log('Document ready state:', document.readyState);
-console.log('modeOnline button:', document.getElementById('modeOnline'));
-console.log('modeTwo button:', document.getElementById('modeTwo'));
-console.log('modeAi button:', document.getElementById('modeAi'));
-console.log('onlinePanel:', document.getElementById('onlinePanel'));
-console.log('PeerJS loaded:', typeof Peer !== 'undefined');
-if (typeof Peer === 'undefined') {
-    console.warn('⚠️ PeerJS not loaded yet, waiting...');
-    window.addEventListener('load', () => {
-        console.log('Page loaded, PeerJS:', typeof Peer !== 'undefined');
-    });
-}
-
 loadPolicyModel();
 loadReplayList();
 
@@ -919,9 +1043,36 @@ const roomParam = urlParams.get('room');
 if (roomParam) {
     gameMode = 'online';
     syncModeUI();
-    setTimeout(() => {
-        joinRoomById(roomParam);
-    }, 500);
+    // Check for saved state
+    const savedState = loadRoomState(roomParam);
+    if (savedState) {
+        // Restore saved state
+        restoreRoomState(savedState);
+        // Try to reconnect
+        setTimeout(() => {
+            if (savedState.isHost) {
+                // Restore as host - recreate room with same ID
+                roomId = savedState.roomId;
+                creatorRole = savedState.creatorRole;
+                onlineRole = savedState.onlineRole;
+                isHost = true;
+                createRoom();
+            } else {
+                // Restore as client - show role selection or reconnect
+                if (savedState.onlineRole) {
+                    joinRoomById(roomParam, savedState.onlineRole);
+                } else {
+                    showRoleSelection(savedState.creatorRole);
+                    pendingRoomId = roomParam.toUpperCase();
+                }
+            }
+        }, 500);
+    } else {
+        // New connection, wait for creator role
+        setTimeout(() => {
+            joinRoomById(roomParam, null);
+        }, 500);
+    }
 } else if (loadState()) {
     syncModeUI();
     buildBoard();
