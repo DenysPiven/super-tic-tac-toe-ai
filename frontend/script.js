@@ -736,17 +736,43 @@ document.getElementById('modeTwo')?.addEventListener('click', () => {
 });
 
 // Add event listener for Online mode button
-document.getElementById('modeOnline')?.addEventListener('click', () => {
-    if (typeof Peer === 'undefined') {
-        alert('PeerJS library not loaded. Please check your internet connection and refresh the page.');
-        console.error('PeerJS not available');
+(function() {
+    const btn = document.getElementById('modeOnline');
+    console.log('=== Online Button Debug ===');
+    console.log('Button element:', btn);
+    
+    if (!btn) {
+        console.error('❌ modeOnline button NOT FOUND in DOM!');
+        console.log('Available buttons:', document.querySelectorAll('button[id*="mode"]'));
         return;
     }
-    cancelAiMove();
-    gameMode = 'online';
-    syncModeUI();
-    updateStatus();
-});
+    
+    console.log('✅ modeOnline button found');
+    console.log('Button classes:', btn.className);
+    console.log('Button text:', btn.textContent);
+    
+    btn.addEventListener('click', function(e) {
+        console.log('🖱️ Online button CLICKED!');
+        console.log('Event:', e);
+        console.log('PeerJS available:', typeof Peer !== 'undefined');
+        
+        if (typeof Peer === 'undefined') {
+            alert('PeerJS library not loaded. Please check your internet connection and refresh the page.');
+            console.error('❌ PeerJS not available');
+            return;
+        }
+        
+        console.log('✅ PeerJS is available, switching to online mode');
+        cancelAiMove();
+        gameMode = 'online';
+        console.log('Game mode set to:', gameMode);
+        syncModeUI();
+        updateStatus();
+        console.log('✅ Online mode activated');
+    });
+    
+    console.log('✅ Event listener added to modeOnline button');
+})();
 
 document.getElementById('modeAi')?.addEventListener('click', () => {
     cancelAiMove();
